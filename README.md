@@ -8,6 +8,8 @@ A self-contained LLM cost governance and rate-limiting service that integrates w
 
 It enforces spending budgets and token/request rate limits on AI traffic in real time, with a management API and React UI for configuration.
 
+<img width="2022" height="1141" alt="Management UI" src="https://github.com/user-attachments/assets/4bd3789b-3f85-4610-aa64-cce98b1974f7" />
+
 ---
 
 ## Features
