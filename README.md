@@ -1,4 +1,4 @@
-# quota-management
+# Quota Management
 
 [![Release](https://github.com/day0ops/quota-management/actions/workflows/release.yml/badge.svg)](https://github.com/day0ops/quota-management/actions/workflows/release.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)

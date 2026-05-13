@@ -11,9 +11,9 @@ The system is composed of three independently deployable services, all backed by
 ```mermaid
 graph TD
     subgraph cluster [Kubernetes Cluster]
-        subgraph agw [agentgateway - kgateway + Envoy]
+        subgraph agw [agentgateway]
             ef["ext-proc filter<br/>budget"]
-            rl["Envoy rate limit filter<br/>token/request enforcement"]
+            rl["rate limit filter<br/>token/request enforcement"]
         end
 
         eb["extproc-budget<br/>Budget checks<br/>Metrics :9090"]
@@ -34,10 +34,10 @@ graph TD
 ### Services
 
 **`extproc-budget`**
-The critical-path service. Sits inline with every AI request via Envoy ext-proc. Enforces spend limits by checking budgets before forwarding and recording actual costs after receiving the LLM response. This service must be low-latency and highly available.
+The critical-path service. Sits inline with every AI request via ext-proc. Enforces spend limits by checking budgets before forwarding and recording actual costs after receiving the LLM response. This service must be low-latency and highly available.
 
 **`extproc-ratelimit`**
-Also inline with every request. Reads rate limit allocations from PostgreSQL (cached) and injects Envoy-compatible dynamic metadata into each request. Envoy's rate limit filter reads this metadata and enforces token/request quotas. This service does not block requests directly—it delegates enforcement to Envoy.
+Also inline with every request. Reads rate limit allocations from PostgreSQL (cached) and injects dynamic metadata into each request. The rate limit filter reads this metadata and enforces token/request quotas. This service does not block requests directly—it delegates enforcement to the gateway.
 
 **`quota-management`**
 The management plane. Provides a REST API for configuring budgets, model costs, rate limit allocations, and approval workflows. Serves the React UI. Also handles background tasks: period resets, reservation cleanup, model cost cache refresh.
@@ -91,7 +91,7 @@ sequenceDiagram
     participant G as agentgateway
     participant R as extproc-ratelimit
     participant D as PostgreSQL
-    participant RLS as Envoy Rate Limit Service
+    participant RLS as Rate Limit Service
     participant L as LLM Provider
 
     C->>G: POST /v1/chat/completions
@@ -313,4 +313,4 @@ Single `quota-management` deployment handles management API, UI, budget enforcem
 
 ### Rate Limit Add-On
 
-`extproc-ratelimit` is optional and only needed when using Envoy's rate limit filter with dynamic token/request quotas. Deploy alongside `extproc-budget` for complete enforcement coverage.
+`extproc-ratelimit` is optional and only needed when using the rate limit filter with dynamic token/request quotas. Deploy alongside `extproc-budget` for complete enforcement coverage.

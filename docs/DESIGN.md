@@ -485,7 +485,7 @@ CEL programs are stateless after compilation—the same compiled program can be 
 
 ## ext-proc Protocol Detail
 
-Both ext-proc servers implement the Envoy `ExternalProcessor` gRPC service:
+Both ext-proc servers implement the `ExternalProcessor` gRPC service:
 
 ```protobuf
 service ExternalProcessor {
