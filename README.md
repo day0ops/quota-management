@@ -64,9 +64,9 @@ graph LR
     ui[Management UI]
 
     subgraph quota [Quota Management]
-        budget[extproc-budget\ngRPC :4444]
-        ratelimit[extproc-ratelimit\ngRPC :4444]
-        api[Management API\nHTTP :8080]
+        budget["extproc-budget<br/>gRPC :4444"]
+        ratelimit["extproc-ratelimit<br/>gRPC :4444"]
+        api["Management API<br/>HTTP :8080"]
         db[(PostgreSQL)]
     end
 

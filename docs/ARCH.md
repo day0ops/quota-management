@@ -12,14 +12,14 @@ The system is composed of three independently deployable services, all backed by
 graph TD
     subgraph cluster [Kubernetes Cluster]
         subgraph agw [agentgateway - kgateway + Envoy]
-            ef[ext-proc filter\nbudget]
-            rl[Envoy rate limit filter\ntoken/request enforcement]
+            ef["ext-proc filter<br/>budget"]
+            rl["Envoy rate limit filter<br/>token/request enforcement"]
         end
 
-        eb[extproc-budget\nBudget checks\nMetrics :9090]
-        er[extproc-ratelimit\nMetadata injection\nMetrics :9090]
+        eb["extproc-budget<br/>Budget checks<br/>Metrics :9090"]
+        er["extproc-ratelimit<br/>Metadata injection<br/>Metrics :9090"]
 
-        qm[quota-management\nManagement API + React UI\nHTTP :8080 | Metrics :9090]
+        qm["quota-management<br/>Management API + React UI<br/>HTTP :8080 / Metrics :9090"]
 
         db[(PostgreSQL\n:5432)]
     end
