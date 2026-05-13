@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Image](https://img.shields.io/badge/registry-GAR-4285F4?logo=googlecloud)](https://console.cloud.google.com/artifacts/docker/field-engineering-apac/australia-southeast1/kasunt)
 
-A self-contained LLM cost governance and rate-limiting service that integrates with [agentgateway](https://agentgateway.dev) via Envoy's [External Processing (ext-proc)](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter) API.
+A self-contained LLM cost governance and rate-limiting service that integrates with [agentgateway](https://agentgateway.dev) via the External Processing (ext-proc) API.
 
 It enforces spending budgets and token/request rate limits on AI traffic in real time, with a management API and React UI for configuration.
 
@@ -26,7 +26,7 @@ It enforces spending budgets and token/request rate limits on AI traffic in real
 - **Per-team, per-model allocations** with token and request limits
 - **Model pattern matching** (e.g., `gpt-4*`, `claude-*`) for wildcard allocations
 - **Burst allowance** configurable per allocation
-- **Dynamic metadata injection** into Envoy's rate limiter via ext-proc headers
+- **Dynamic metadata injection** into the rate limiter via ext-proc headers
 - **Approval workflow** matching the budget workflow
 
 ### Cost Tracking
@@ -57,7 +57,7 @@ It enforces spending budgets and token/request rate limits on AI traffic in real
 ```mermaid
 graph LR
     client([AI Client])
-    agw[agentgateway\nkgateway + Envoy]
+    agw[agentgateway]
     llm([LLM Provider])
     ui[Management UI]
 
@@ -86,7 +86,7 @@ graph LR
 | `extproc-budget`    | Budget enforcement only (standalone)           | gRPC :4444, Metrics :9090             |
 | `extproc-ratelimit` | Rate limit metadata injection                  | gRPC :4444, Metrics :9090             |
 
-The ext-proc servers implement the Envoy External Processor gRPC API. agentgateway calls them on every request and response to enforce budgets and inject rate limit metadata.
+The ext-proc servers implement the External Processor gRPC API. agentgateway calls them on every request and response to enforce budgets and inject rate limit metadata.
 
 ---
 
@@ -243,7 +243,7 @@ request.headers["x-environment"] == "production"
 - [pgx](https://github.com/jackc/pgx) - PostgreSQL driver
 - [zerolog](https://github.com/rs/zerolog) - Structured logging
 - [cel-go](https://github.com/google/cel-go) - CEL expression evaluation
-- [google/cel-spec](https://github.com/google/cel-spec) - Envoy ext-proc gRPC stubs
+- [google/cel-spec](https://github.com/google/cel-spec) - ext-proc gRPC stubs
 - [Prometheus client](https://github.com/prometheus/client_golang) - Metrics
 
 **Frontend (TypeScript)**
@@ -257,7 +257,7 @@ request.headers["x-environment"] == "production"
 **Infrastructure**
 
 - PostgreSQL 16 - state store
-- Envoy External Processor API (gRPC) - gateway integration
+- External Processor API (gRPC) - gateway integration
 - Prometheus - metrics collection
 - Kubernetes - deployment target
 
