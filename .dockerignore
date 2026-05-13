@@ -1,0 +1,27 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+bin/
+coverage.out
+coverage.html
+
+# UI development files (we only need the source for Docker build)
+ui/node_modules
+ui/dist
+ui/.git
+
+# IDE
+.idea/
+.vscode/
+*.sw?
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yaml

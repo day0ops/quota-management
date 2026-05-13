@@ -1,0 +1,330 @@
+-- Budget Management Schema
+
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Enums
+DO $$ BEGIN
+    CREATE TYPE budget_period AS ENUM ('hourly', 'daily', 'weekly', 'monthly', 'custom');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE entity_type AS ENUM ('org', 'team', 'user');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE approval_status AS ENUM ('pending', 'approved', 'rejected', 'closed');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- Model costs table
+CREATE TABLE IF NOT EXISTS model_costs (
+    id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    model_id                VARCHAR(255) NOT NULL UNIQUE,
+    provider                VARCHAR(100) NOT NULL,
+    input_cost_per_million  DECIMAL(20, 10) NOT NULL,
+    output_cost_per_million DECIMAL(20, 10) NOT NULL,
+    cache_read_cost_million DECIMAL(20, 10),
+    cache_write_cost_million DECIMAL(20, 10),
+    model_pattern           VARCHAR(255),
+    effective_date          TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    created_by_user_id      VARCHAR(255),
+    created_by_email        VARCHAR(255),
+    created_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_costs_model_id ON model_costs(model_id);
+CREATE INDEX IF NOT EXISTS idx_model_costs_provider ON model_costs(provider);
+
+-- Budget definitions table
+CREATE TABLE IF NOT EXISTS budget_definitions (
+    id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    entity_type             entity_type NOT NULL,
+    name                    VARCHAR(255) NOT NULL,
+    match_expression        TEXT NOT NULL,
+    budget_amount_usd       DECIMAL(20, 10) NOT NULL,
+    period                  budget_period NOT NULL,
+    custom_period_seconds   INTEGER,
+    warning_threshold_pct   INTEGER NOT NULL DEFAULT 80,
+    parent_id               UUID REFERENCES budget_definitions(id),
+    isolated                BOOLEAN NOT NULL DEFAULT false,
+    allow_fallback          BOOLEAN NOT NULL DEFAULT false,
+    enabled                 BOOLEAN NOT NULL DEFAULT true,
+    disabled_by_user_id     VARCHAR(255),
+    disabled_by_email       VARCHAR(255),
+    disabled_by_is_org      BOOLEAN DEFAULT FALSE,
+    disabled_at             TIMESTAMPTZ,
+    current_period_start    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    current_usage_usd       DECIMAL(20, 10) NOT NULL DEFAULT 0,
+    pending_usage_usd       DECIMAL(20, 10) NOT NULL DEFAULT 0,
+    version                 BIGINT NOT NULL DEFAULT 1,
+    description             TEXT,
+    owner_org_id            VARCHAR(255),
+    owner_team_id           VARCHAR(255),
+    owner_user_id           VARCHAR(255),
+    approval_status         approval_status NOT NULL DEFAULT 'approved',
+    created_by_user_id      VARCHAR(255),
+    created_by_email        VARCHAR(255),
+    rejection_count         INT NOT NULL DEFAULT 0,
+    created_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT unique_entity UNIQUE (entity_type, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_budget_definitions_entity ON budget_definitions(entity_type, name);
+CREATE INDEX IF NOT EXISTS idx_budget_definitions_parent ON budget_definitions(parent_id);
+CREATE INDEX IF NOT EXISTS idx_budget_definitions_enabled ON budget_definitions(enabled);
+CREATE INDEX IF NOT EXISTS idx_budget_definitions_owner_org ON budget_definitions(owner_org_id);
+CREATE INDEX IF NOT EXISTS idx_budget_definitions_owner_team ON budget_definitions(owner_team_id);
+CREATE INDEX IF NOT EXISTS idx_budget_definitions_owner_user ON budget_definitions(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_budget_match_expr_hash ON budget_definitions(entity_type, md5(match_expression));
+
+-- Usage records table
+CREATE TABLE IF NOT EXISTS usage_records (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    budget_id       UUID NOT NULL REFERENCES budget_definitions(id) ON DELETE CASCADE,
+    request_id      VARCHAR(255) NOT NULL,
+    model_id        VARCHAR(255) NOT NULL,
+    input_tokens    BIGINT NOT NULL,
+    output_tokens   BIGINT NOT NULL,
+    cost_usd        DECIMAL(20, 10) NOT NULL,
+    parent_charged  BOOLEAN NOT NULL DEFAULT true,
+    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_records_budget_id ON usage_records(budget_id);
+CREATE INDEX IF NOT EXISTS idx_usage_records_created_at ON usage_records(created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_records_request_id ON usage_records(request_id);
+CREATE INDEX IF NOT EXISTS idx_usage_records_budget_created ON usage_records(budget_id, created_at);
+
+-- Request reservations table
+CREATE TABLE IF NOT EXISTS request_reservations (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    budget_id           UUID NOT NULL REFERENCES budget_definitions(id) ON DELETE CASCADE,
+    request_id          VARCHAR(255) NOT NULL,
+    estimated_cost_usd  DECIMAL(20, 10) NOT NULL,
+    expires_at          TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at          TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (budget_id, request_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_reservations_budget_id ON request_reservations(budget_id);
+CREATE INDEX IF NOT EXISTS idx_request_reservations_expires_at ON request_reservations(expires_at);
+CREATE INDEX IF NOT EXISTS idx_request_reservations_request_id ON request_reservations(request_id);
+
+-- Budget approvals table
+CREATE TABLE IF NOT EXISTS budget_approvals (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    budget_id      UUID NOT NULL REFERENCES budget_definitions(id) ON DELETE CASCADE,
+    attempt_number INT NOT NULL DEFAULT 1,
+    action         VARCHAR(20) NOT NULL,
+    actor_user_id  VARCHAR(255) NOT NULL,
+    actor_email    VARCHAR(255),
+    reason         TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_approvals_budget ON budget_approvals(budget_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_approvals_pending ON budget_approvals(action) WHERE action = 'submitted';
+
+-- Budget alerts table
+CREATE TABLE IF NOT EXISTS budget_alerts (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    budget_id             UUID NOT NULL REFERENCES budget_definitions(id) ON DELETE CASCADE,
+    alert_type            VARCHAR NOT NULL,
+    status                VARCHAR NOT NULL DEFAULT 'active',
+    triggered_usage_usd   DECIMAL(12,6),
+    budget_amount_usd     DECIMAL(12,6),
+    threshold_pct         INT,
+    projected_spend_usd   DECIMAL(12,6),
+    days_until_exhausted  DECIMAL(8,2),
+    dismissed_by_user_id  VARCHAR,
+    dismissed_at          TIMESTAMPTZ,
+    resolved_at           TIMESTAMPTZ,
+    period_start          TIMESTAMPTZ NOT NULL,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS budget_alerts_dedup ON budget_alerts(budget_id, alert_type, period_start);
+CREATE INDEX IF NOT EXISTS budget_alerts_budget_id ON budget_alerts(budget_id);
+CREATE INDEX IF NOT EXISTS budget_alerts_status ON budget_alerts(status);
+
+DROP TRIGGER IF EXISTS budget_alerts_updated_at ON budget_alerts;
+CREATE TRIGGER budget_alerts_updated_at
+    BEFORE UPDATE ON budget_alerts
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Audit log table
+CREATE TABLE IF NOT EXISTS audit_log (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_type   VARCHAR(50) NOT NULL,
+    entity_id     VARCHAR(255) NOT NULL,
+    action        VARCHAR(50) NOT NULL,
+    actor_user_id VARCHAR(255),
+    actor_email   VARCHAR(255),
+    org_id        VARCHAR(255),
+    team_id       VARCHAR(255),
+    metadata      JSONB,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_org ON audit_log(org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_user_id, created_at DESC);
+
+-- Function to update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+DROP TRIGGER IF EXISTS update_model_costs_updated_at ON model_costs;
+CREATE TRIGGER update_model_costs_updated_at
+    BEFORE UPDATE ON model_costs
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_budget_definitions_updated_at ON budget_definitions;
+CREATE TRIGGER update_budget_definitions_updated_at
+    BEFORE UPDATE ON budget_definitions
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_budget_approvals_updated_at ON budget_approvals;
+CREATE TRIGGER update_budget_approvals_updated_at
+    BEFORE UPDATE ON budget_approvals
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Default model costs
+INSERT INTO model_costs (model_id, provider, input_cost_per_million, output_cost_per_million) VALUES
+    -- OpenAI models
+    ('gpt-4.1', 'openai', 2.00, 8.00),
+    ('gpt-4.1-mini', 'openai', 0.40, 1.60),
+    ('gpt-4.1-nano', 'openai', 0.10, 0.40),
+    ('gpt-4o', 'openai', 2.50, 10.00),
+    ('gpt-4o-mini', 'openai', 0.15, 0.60),
+    ('gpt-4-turbo', 'openai', 10.00, 30.00),
+    ('gpt-4', 'openai', 30.00, 60.00),
+    ('gpt-3.5-turbo', 'openai', 0.50, 1.50),
+    ('o3', 'openai', 10.00, 40.00),
+    ('o3-mini', 'openai', 1.10, 4.40),
+    ('o4-mini', 'openai', 1.10, 4.40),
+    ('o1', 'openai', 15.00, 60.00),
+    ('o1-mini', 'openai', 3.00, 12.00),
+    ('o1-pro', 'openai', 150.00, 600.00),
+    -- Anthropic models
+    ('claude-opus-4-5-20250415', 'anthropic', 15.00, 75.00),
+    ('claude-sonnet-4-5-20250415', 'anthropic', 3.00, 15.00),
+    ('claude-sonnet-4-20250514', 'anthropic', 3.00, 15.00),
+    ('claude-haiku-4-5-20251001', 'anthropic', 1.00, 5.00),
+    ('claude-3-5-sonnet-20241022', 'anthropic', 3.00, 15.00),
+    ('claude-3-5-haiku-20241022', 'anthropic', 0.80, 4.00),
+    ('claude-3-opus-20240229', 'anthropic', 15.00, 75.00),
+    ('claude-3-sonnet-20240229', 'anthropic', 3.00, 15.00),
+    ('claude-3-haiku-20240307', 'anthropic', 0.25, 1.25),
+    -- Google models
+    ('gemini-2.5-pro', 'google', 1.25, 10.00),
+    ('gemini-2.5-flash', 'google', 0.15, 0.60),
+    ('gemini-2.0-pro', 'google', 1.25, 5.00),
+    ('gemini-2.0-flash', 'google', 0.10, 0.40),
+    ('gemini-2.0-flash-lite', 'google', 0.075, 0.30),
+    ('gemini-1.5-pro', 'google', 1.25, 5.00),
+    ('gemini-1.5-flash', 'google', 0.075, 0.30),
+    -- Mistral models
+    ('mistral-large', 'mistral', 2.00, 6.00),
+    ('mistral-medium', 'mistral', 2.70, 8.10),
+    ('mistral-small', 'mistral', 0.20, 0.60),
+    -- AWS Nova models
+    ('amazon.nova-micro-v1:0', 'aws', 0.035, 0.14),
+    ('amazon.nova-lite-v1:0', 'aws', 0.06, 0.24),
+    ('amazon.nova-pro-v1:0', 'aws', 0.80, 3.20)
+ON CONFLICT (model_id) DO NOTHING;
+
+-- Rate limit allocations table
+CREATE TABLE IF NOT EXISTS rate_limit_allocations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id VARCHAR(255) NOT NULL,
+    team_id VARCHAR(255) NOT NULL,
+    model_pattern VARCHAR(255) NOT NULL,
+    token_limit BIGINT,
+    token_unit VARCHAR(10) CHECK (token_unit IN ('SECOND', 'MINUTE', 'HOUR', 'DAY')),
+    request_limit BIGINT,
+    request_unit VARCHAR(10) CHECK (request_unit IN ('SECOND', 'MINUTE', 'HOUR', 'DAY')),
+    burst_percentage INT NOT NULL DEFAULT 0,
+    enforcement VARCHAR(20) NOT NULL DEFAULT 'enforced' CHECK (enforcement IN ('enforced', 'monitoring')),
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    disabled_by_user_id VARCHAR(255),
+    disabled_by_email VARCHAR(255),
+    disabled_by_is_org BOOLEAN DEFAULT FALSE,
+    disabled_at TIMESTAMPTZ,
+    approval_status approval_status NOT NULL DEFAULT 'pending',
+    approved_by VARCHAR(255),
+    approved_at TIMESTAMPTZ,
+    created_by_user_id VARCHAR(255),
+    created_by_email VARCHAR(255),
+    description TEXT,
+    rejection_count INT NOT NULL DEFAULT 0,
+    version BIGINT NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- At least one limit must be set
+    CONSTRAINT at_least_one_limit CHECK (token_limit IS NOT NULL OR request_limit IS NOT NULL)
+);
+
+-- Unique constraint per org/team/model when not rejected (allows resubmission after rejection)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_active_allocation
+    ON rate_limit_allocations(org_id, team_id, model_pattern)
+    WHERE approval_status != 'rejected';
+
+-- Index for lookups by team and model
+CREATE INDEX IF NOT EXISTS idx_rate_limit_allocations_team_model ON rate_limit_allocations(team_id, model_pattern);
+
+-- Index for approval status filtering
+CREATE INDEX IF NOT EXISTS idx_rate_limit_allocations_approval ON rate_limit_allocations(approval_status);
+
+-- Index for org filtering
+CREATE INDEX IF NOT EXISTS idx_rate_limit_allocations_org ON rate_limit_allocations(org_id);
+
+-- Add updated_at trigger
+DROP TRIGGER IF EXISTS update_rate_limit_allocations_updated_at ON rate_limit_allocations;
+CREATE TRIGGER update_rate_limit_allocations_updated_at
+    BEFORE UPDATE ON rate_limit_allocations
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Rate limit approvals table (similar to budget_approvals)
+CREATE TABLE IF NOT EXISTS rate_limit_approvals (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    allocation_id  UUID NOT NULL REFERENCES rate_limit_allocations(id) ON DELETE CASCADE,
+    attempt_number INT NOT NULL DEFAULT 1,
+    action         VARCHAR(20) NOT NULL,
+    actor_user_id  VARCHAR(255),
+    actor_email    VARCHAR(255),
+    reason         TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_rate_limit_approvals_allocation ON rate_limit_approvals(allocation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_approvals_pending ON rate_limit_approvals(action) WHERE action = 'submitted';
+
+DROP TRIGGER IF EXISTS update_rate_limit_approvals_updated_at ON rate_limit_approvals;
+CREATE TRIGGER update_rate_limit_approvals_updated_at
+    BEFORE UPDATE ON rate_limit_approvals
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
